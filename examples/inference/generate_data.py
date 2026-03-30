@@ -71,7 +71,7 @@ from datatrove.pipeline.inference.dataset_card_generator import (
 )
 from datatrove.pipeline.inference.run_inference import InferenceConfig, InferenceResult, InferenceRunner
 from datatrove.pipeline.readers import HuggingFaceDatasetReader
-from datatrove.pipeline.writers import ParquetWriter
+from datatrove.pipeline.writers import JsonlWriter
 from datatrove.utils.logging import logger
 
 
@@ -90,8 +90,6 @@ from utils import (  # noqa: E402
     validate_config,
 )
 
-
-MB = 1024 * 1024
 
 
 def _compute_reader_limit(max_examples: int, tasks: int) -> int:
@@ -159,6 +157,7 @@ def main(
     presence_penalty: float | None = None,
     repetition_penalty: float | None = None,
     max_tokens: int = 16384,
+    enable_thinking: bool = True,  # Set to False to disable thinking for models like Qwen3
     rollouts_per_document: int = 1,
     seed: int | None = None,  # Random seed for reproducible generation
     # Processing settings
@@ -281,6 +280,7 @@ def main(
                 **({"presence_penalty": presence_penalty} if presence_penalty is not None else {}),
                 **({"repetition_penalty": repetition_penalty} if repetition_penalty is not None else {}),
                 **({"seed": seed} if seed is not None else {}),
+                "extra_body": {"enable_thinking": enable_thinking},
             }
         )
 
@@ -404,12 +404,11 @@ def main(
             checkpoints_local_dir=checkpoints_path if not benchmark_mode else None,
             skip_bad_requests=True,
             # The HuggingFaceDatasetWriter only uploads at the end, the ParquetWriter uploads incrementally
-            output_writer=ParquetWriter(
+            output_writer=JsonlWriter(
                 output_folder=output_path,
-                output_filename="${rank}_${chunk_index}.parquet",
+                output_filename="${rank}_${chunk_index}.jsonl",
+                compression=None,
                 expand_metadata=True,
-                max_file_size=MB if local_execution else 256 * MB,  # ~1MB for debugging, ~256MB for slurm
-                batch_size=10 if local_execution else 1000,
             ),
         ),
     ]

@@ -42,6 +42,9 @@ PROMPT_TEMPLATES: dict[str, str] = {
         "reference to other answers. Ensure the FAQ works as a standalone document. Output only the FAQ, nothing "
         "else.\n\nDocument: [[DOCUMENT]]"
     ),
+    "faq_de": (
+        "Schreiben Sie das Dokument als umfassende FAQ (Häufig gestellte Fragen) um. Extrahieren oder leiten Sie die wichtigsten Fragen ab, die ein Leser zu diesem Thema haben könnte, und geben Sie klare, direkte Antworten. Ordnen Sie die Fragen logisch, von grundlegend bis fortgeschritten oder nach Themenbereich. Jede Antwort sollte in sich abgeschlossen und verständlich sein, ohne dass Verweise auf andere Antworten erforderlich sind. Stellen Sie sicher, dass die FAQ als eigenständiges Dokument funktioniert. Geben Sie nur die FAQ aus, nichts anderes..\n\nDocument: [[DOCUMENT]]"
+    ),
     "tutorial": (
         "Rewrite the document as a clear, step-by-step tutorial or instructional guide. Use numbered steps or bullet "
         "points where appropriate to enhance clarity. Preserve all essential information while ensuring the style "
