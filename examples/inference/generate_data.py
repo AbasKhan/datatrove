@@ -280,8 +280,60 @@ def main(
                 **({"presence_penalty": presence_penalty} if presence_penalty is not None else {}),
                 **({"repetition_penalty": repetition_penalty} if repetition_penalty is not None else {}),
                 **({"seed": seed} if seed is not None else {}),
-                "extra_body": {"enable_thinking": enable_thinking},
+                "chat_template_kwargs": {"enable_thinking": enable_thinking},
             }
+        )
+
+    async def chunked_rollout(
+        document: Document,
+        generate: Callable[[dict[str, Any]], Awaitable[InferenceResult]],
+    ) -> InferenceResult:
+        """
+        Rollout that splits long documents into chunks and generates sequentially,
+        using the previous generation as an assistant prefill for each subsequent chunk.
+        """
+        CHAR_PER_TOKEN = 3
+        max_chars_per_part = int((model_max_context - max_tokens) * CHAR_PER_TOKEN)
+
+        if isinstance(document.text, list) and all(isinstance(msg, dict) for msg in document.text):
+            raise ValueError("Chunked rollout does not support message list inputs")
+
+        content = prompt_template.replace("[[DOCUMENT]]", document.text) if prompt_template else document.text
+        chunks = [content[i : i + max_chars_per_part] for i in range(0, len(content), max_chars_per_part)] or [content]
+
+        generations: list[str] = []
+        last_result: InferenceResult | None = None
+        combined_usage: dict = {}
+
+        for chunk in chunks:
+            messages = [] if system_prompt is None else [{"role": "system", "content": system_prompt}]
+            prev = generations[-1] if generations else ""
+            messages.append({"role": "user", "content": chunk})
+            messages.append({"role": "assistant", "content": prev})
+
+            last_result = await generate(
+                {
+                    "messages": messages,
+                    "max_tokens": max_tokens,
+                    "temperature": temperature,
+                    "top_k": top_k,
+                    "top_p": top_p,
+                    **({"min_p": min_p} if min_p is not None else {}),
+                    **({"presence_penalty": presence_penalty} if presence_penalty is not None else {}),
+                    **({"repetition_penalty": repetition_penalty} if repetition_penalty is not None else {}),
+                    **({"seed": seed} if seed is not None else {}),
+                    "chat_template_kwargs": {"enable_thinking": enable_thinking},
+                    "continue_final_message": True,
+                }
+            )
+            generations.append(last_result.text)
+            for key in ("completion_tokens", "prompt_tokens", "total_tokens"):
+                combined_usage[key] = combined_usage.get(key, 0) + last_result.usage.get(key, 0)
+
+        return InferenceResult(
+            text="".join(generations),
+            finish_reason=last_result.finish_reason,
+            usage=combined_usage,
         )
 
     temperature = temperature if temperature is not None else 1.0
