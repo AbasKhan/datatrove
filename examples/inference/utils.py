@@ -327,7 +327,7 @@ def validate_config(
     dp: int,
     nodes_per_task: int,
     optimization_level: int,
-    config: AutoConfig,
+    config: AutoConfig | None = None,
     prompt_template: str | None = None,
 ) -> int:
     """
@@ -377,13 +377,14 @@ def validate_config(
             f"(currently {nodes_per_task}) or reduce tp/pp (currently tp={tp}, pp={pp})."
         )
 
-    # Check if tp is valid for vLLM
-    # Handle multi-modal configs (e.g., Gemma3) where num_attention_heads is in text_config
-    num_heads = int(getattr(config, "num_attention_heads", None) or config.text_config.num_attention_heads)
-    if num_heads % tp != 0:
-        raise ValueError(
-            f"Total number of attention heads ({num_heads}) must be divisible by tensor parallel size (tp={tp})."
-        )
+    # Check if tp is valid for vLLM (skipped if config is not available)
+    if config is not None:
+        # Handle multi-modal configs (e.g., Gemma3) where num_attention_heads is in text_config
+        num_heads = int(getattr(config, "num_attention_heads", None) or config.text_config.num_attention_heads)
+        if num_heads % tp != 0:
+            raise ValueError(
+                f"Total number of attention heads ({num_heads}) must be divisible by tensor parallel size (tp={tp})."
+            )
 
     return gpus_per_node
 

@@ -63,7 +63,6 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 import typer
-from transformers import AutoConfig, GenerationConfig
 
 from datatrove.data import Document
 from datatrove.pipeline.inference.dataset_card_generator import (
@@ -118,7 +117,7 @@ def main(
     input_dataset_config: str | None = None,
     input_dataset_split: str = "train",
     prompt_column: str = "question",
-    prompt_template: str | list[str] | None = None,  # Can be "template" or ["name", "template"]
+    prompt_template: str | None = None,  # Can be "template", '["name", "template"]', or a named template
     max_examples: int = -1,
     # Output dataset details
     output_dataset_name: str = "s1K-1.1-datatrove",
@@ -156,6 +155,9 @@ def main(
     temperature: float | None = None,
     top_k: int | None = None,
     top_p: float | None = None,
+    min_p: float | None = None,
+    presence_penalty: float | None = None,
+    repetition_penalty: float | None = None,
     max_tokens: int = 16384,
     rollouts_per_document: int = 1,
     seed: int | None = None,  # Random seed for reproducible generation
@@ -170,14 +172,20 @@ def main(
     name: str = "synth",
     time: str = "12:00:00",
     qos: str = "low",
+    partition: str = "hopper-prod",
+    account: str | None = None,
     reservation: str | None = None,
+    mem: str | None = None,  # Total memory e.g. "128G"; overrides mem-per-cpu default
 ) -> None:
     """Typer CLI entrypoint that runs the pipeline with provided options."""
-    # Skip HuggingFace setup in benchmark mode
+    output_dataset_path = Path(output_dataset_name).expanduser()
+    save_output_locally = output_dataset_path.is_absolute() or output_dataset_name.startswith(".")
+
+    # Skip HuggingFace setup in benchmark mode or when writing output locally
     full_repo_id = None
     if benchmark_mode:
         enable_monitoring = False
-    else:
+    elif not save_output_locally:
         check_hf_auth()  # Check authentication early to avoid errors later
         full_repo_id = resolve_repo_id(output_dataset_name)  # Resolve full repo name for the output dataset
         ensure_repo_exists(full_repo_id, private=output_private)  # Create the repository if it doesn't exist
@@ -193,13 +201,28 @@ def main(
         nodes_per_task = 1
         logger.info(f"Local execution on {available_gpus} GPUs on one node")
 
-    config = AutoConfig.from_pretrained(
-        model_name_or_path, revision=model_revision, trust_remote_code=trust_remote_code
-    )
 
-    # Parse prompt_template: can be "template" or ["name", "template"]
+    # Parse prompt_template: can be a named template (e.g. "faq"), a file path, a JSON ["name", "template"] list,
+    # or a raw template string containing [[DOCUMENT]]
+    _parsed_template: str | list | None = prompt_template
+    if isinstance(prompt_template, str):
+        import json
+
+        template_path = Path(prompt_template).expanduser()
+        if template_path.is_file():
+            _parsed_template = [template_path.stem, template_path.read_text()]
+        elif prompt_template.startswith("["):
+            _parsed_template = json.loads(prompt_template)
+        else:
+            try:
+                from finephrase import PROMPT_TEMPLATES  # noqa: PLC0415
+
+                if prompt_template in PROMPT_TEMPLATES:
+                    _parsed_template = [prompt_template, PROMPT_TEMPLATES[prompt_template]]
+            except ImportError:
+                pass
     prompt_template_name, prompt_template = (
-        prompt_template if isinstance(prompt_template, list) else ("default", prompt_template)
+        _parsed_template if isinstance(_parsed_template, list) else ("default", _parsed_template)
     )
 
     gpus_per_node = validate_config(
@@ -208,7 +231,7 @@ def main(
         dp=dp,
         nodes_per_task=nodes_per_task,
         optimization_level=optimization_level,
-        config=config,
+        config=None,
         prompt_template=prompt_template,
     )
 
@@ -254,16 +277,16 @@ def main(
                 "temperature": temperature,
                 "top_k": top_k,
                 "top_p": top_p,
+                **({"min_p": min_p} if min_p is not None else {}),
+                **({"presence_penalty": presence_penalty} if presence_penalty is not None else {}),
+                **({"repetition_penalty": repetition_penalty} if repetition_penalty is not None else {}),
                 **({"seed": seed} if seed is not None else {}),
             }
         )
 
-    generation_config = GenerationConfig.from_pretrained(
-        model_name_or_path, revision=model_revision, trust_remote_code=trust_remote_code
-    )
-    temperature = temperature if temperature is not None else getattr(generation_config, "temperature", 1.0)
-    top_p = top_p if top_p is not None else getattr(generation_config, "top_p", 1.0)
-    top_k = top_k if top_k is not None else getattr(generation_config, "top_k", -1)
+    temperature = temperature if temperature is not None else 1.0
+    top_p = top_p if top_p is not None else 1.0
+    top_k = top_k if top_k is not None else -1
 
     # Normalize speculative config; treat common "none" strings as disabled
     spec_raw = speculative_config
@@ -291,11 +314,12 @@ def main(
         speculative_config=spec_raw,
         quantization=quantization,
     )
-    output_path = (
-        f"hf://datasets/{full_repo_id}/{prompt_template_name}"
-        if not benchmark_mode
-        else str(run_path / "output" / "data")
-    )
+    if benchmark_mode:
+        output_path = str(run_path / "output" / "data")
+    elif save_output_locally:
+        output_path = str(output_dataset_path / prompt_template_name)
+    else:
+        output_path = f"hf://datasets/{full_repo_id}/{prompt_template_name}"
     checkpoints_path = str(run_path / "checkpoints")
     inference_logs_path = run_path / "inference_logs"
     monitor_logs_path = run_path / "monitor_logs"
@@ -327,7 +351,13 @@ def main(
         "optimization-level": optimization_level,
     }
     # Memory per CPU for slurm allocation (in GB)
-    mem_per_cpu_gb = 22
+    # If --mem total memory is given, derive mem_per_cpu_gb from it; otherwise use default
+    if mem:
+        mem_gb = int("".join(filter(str.isdigit, mem)))
+        cpus_per_task = gpus_per_node * 11
+        mem_per_cpu_gb = max(1, mem_gb // cpus_per_task)
+    else:
+        mem_per_cpu_gb = 22
     if not local_execution and nodes_per_task > 1:
         # vLLM defaults to the mp backend when TP fits on a single host; but when TP spans
         # multiple nodes we must force the Ray backend so TP can exceed local GPU count.
@@ -350,12 +380,22 @@ def main(
         server_log_folder=str(inference_logs_path / "server_logs"),
     )
 
+    input_dataset_path = Path(input_dataset_name).expanduser()
+    load_input_from_disk = input_dataset_path.exists() and input_dataset_path.is_dir()
+
+    if load_input_from_disk and input_dataset_config is not None:
+        logger.warning("Ignoring --input-dataset-config because local datasets loaded from disk do not use configs.")
+
+    if load_input_from_disk:
+        logger.info(f"Loading input dataset from local disk: {input_dataset_path}")
+
     inference_pipeline = [
         HuggingFaceDatasetReader(
-            dataset=input_dataset_name,
-            dataset_options={"name": input_dataset_config, "split": input_dataset_split},
+            dataset="parquet" if load_input_from_disk else input_dataset_name,
+            dataset_options={"data_dir": str(input_dataset_path), "split": "train"} if load_input_from_disk else {"name": input_dataset_config, "split": input_dataset_split},
             text_key=prompt_column,
             limit=_compute_reader_limit(max_examples=max_examples, tasks=tasks),
+            load_from_disk=False,
         ),
         InferenceRunner(
             rollout_fn=simple_rollout,
@@ -374,30 +414,32 @@ def main(
         ),
     ]
 
-    dataset_card_params = InferenceDatasetCardParams(
-        output_repo_id=full_repo_id,
-        input_dataset_name=input_dataset_name,
-        input_dataset_split=input_dataset_split,
-        input_dataset_config=input_dataset_config,
-        prompt_column=prompt_column,
-        prompt_template=prompt_template,
-        prompt_template_name=prompt_template_name,
-        system_prompt=system_prompt,
-        model_name=model_name_or_path,
-        model_revision=model_revision,
-        generation_kwargs={
-            "max_tokens": max_tokens,
-            "model_max_context": model_max_context,
-            "temperature": temperature,
-            "top_k": top_k,
-            "top_p": top_p,
-            "seed": seed,
-        },
-        spec_config=normalized_spec,
-        stats_path=str(inference_logs_path / "stats.json"),
-    )
-
-    datacard_pipeline = [InferenceDatasetCardGenerator(params=dataset_card_params)]
+    dataset_card_params = None
+    datacard_pipeline = None
+    if not save_output_locally and not benchmark_mode:
+        dataset_card_params = InferenceDatasetCardParams(
+            output_repo_id=full_repo_id,
+            input_dataset_name=input_dataset_name,
+            input_dataset_split=input_dataset_split,
+            input_dataset_config=input_dataset_config,
+            prompt_column=prompt_column,
+            prompt_template=prompt_template,
+            prompt_template_name=prompt_template_name,
+            system_prompt=system_prompt,
+            model_name=model_name_or_path,
+            model_revision=model_revision,
+            generation_kwargs={
+                "max_tokens": max_tokens,
+                "model_max_context": model_max_context,
+                "temperature": temperature,
+                "top_k": top_k,
+                "top_p": top_p,
+                "seed": seed,
+            },
+            spec_config=normalized_spec,
+            stats_path=str(inference_logs_path / "stats.json"),
+        )
+        datacard_pipeline = [InferenceDatasetCardGenerator(params=dataset_card_params)]
 
     if local_execution:
         from datatrove.executor import LocalPipelineExecutor  # Lazy import to speed up startup time
@@ -410,7 +452,7 @@ def main(
         )
         inference_executor.run()
 
-        if not benchmark_mode:
+        if datacard_pipeline is not None:
             datacard_executor = LocalPipelineExecutor(
                 pipeline=datacard_pipeline,
                 logging_dir=str(datacard_logs_path),
@@ -423,10 +465,14 @@ def main(
         from datatrove.executor import SlurmPipelineExecutor  # Lazy import to speed up startup time
 
         # Isolate Xet cache per Slurm process to avoid cache contention across parallel jobs.
+        hf_home = os.environ.get("HF_HOME") or str(Path(__file__).parent.parent.parent / "hf_cache")
         slurm_env_command = (
             f"source .venv/bin/activate && export PYTHONPATH={EXAMPLES_INFERENCE_DIR}:$PYTHONPATH"
+            f' && export HF_HOME="{hf_home}"'
             ' && export HF_XET_CACHE="/tmp/hf_xet/${SLURM_JOB_ID}_${SLURM_ARRAY_TASK_ID}_${SLURM_PROCID}"'
             ' && mkdir -p "$HF_XET_CACHE"'
+            " && export CUDA_HOME=/software/genoa/r25.06/CUDA/12.8.0"
+            " && export PATH=$CUDA_HOME/bin:$PATH"
         )
 
         inference_executor = SlurmPipelineExecutor(
@@ -435,7 +481,7 @@ def main(
             tasks=tasks,
             workers=workers,
             time=time,
-            partition="hopper-prod",
+            partition=partition,
             max_array_launch_parallel=True,
             qos=qos,
             job_name=f"{name}_inference",
@@ -447,6 +493,7 @@ def main(
             srun_args={"cpu-bind": "none"},
             sbatch_args={
                 **({"reservation": reservation} if reservation else {}),
+                **({"account": account} if account else {}),
             },
             env_command=slurm_env_command,
         )
@@ -472,30 +519,30 @@ def main(
                 tasks=1,
                 workers=1,
                 time="7-00:00:00",  # Long enough to outlast inference
-                partition="hopper-cpu",
+                partition=partition,
                 qos=qos,
                 job_name=f"{name}_monitor",
                 cpus_per_task=1,
-                sbatch_args={"mem-per-cpu": "4G", "requeue": ""},  # Requeue to handle long running jobs
+                sbatch_args={"mem-per-cpu": "4G", "requeue": "", **({"account": account} if account else {})},
                 env_command=slurm_env_command,
             )
 
             monitor_executor.run()
 
-        if not benchmark_mode:
+        if datacard_pipeline is not None:
             datacard_executor = SlurmPipelineExecutor(
                 pipeline=datacard_pipeline,
                 logging_dir=str(datacard_logs_path),
                 tasks=1,
                 workers=1,
                 time="0:10:00",
-                partition="hopper-cpu",
+                partition=partition,
                 qos=qos,
                 job_name=f"{name}_datacard",
                 cpus_per_task=1,
                 depends=inference_executor,
                 run_on_dependency_fail=False,  # use afterok
-                sbatch_args={"mem-per-cpu": "4G"},
+                sbatch_args={"mem-per-cpu": "4G", **({"account": account} if account else {})},
                 env_command=slurm_env_command,
             )
             datacard_executor.run()

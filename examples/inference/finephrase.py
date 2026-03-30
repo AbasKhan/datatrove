@@ -19,32 +19,6 @@ from generate_data import main as generate_data_main
 from datatrove.utils.logging import logger
 
 
-KWARGS: dict[str, Any] = {
-    "time": "7-00:00:00",
-    "qos": "low",
-    "model_name_or_path": "HuggingFaceTB/SmolLM2-1.7B-Instruct",
-    "model_max_context": 8192,
-    "max_tokens": 2048,  # Could do 4096, but the model often does not generate as much anyway
-    "input_dataset_name": "HuggingFaceFW/fineweb-edu",
-    "input_dataset_config": "sample-350BT",
-    "input_dataset_split": "train",
-    "prompt_column": "text",
-    "output_dataset_name": "HuggingFaceFW/finephrase",
-    "output_dir": "finephrase",
-    "output_private": False,
-    "max_concurrent_generations": 5000,
-    "max_concurrent_documents": 5000,
-    "max_num_seqs": 2048,
-    "max_num_batched_tokens": 16384,  # Optimized for 32768 tokens, but we use 16384 tokens to avoid OOM
-    "gpu_memory_utilization": 0.90,  # Optimized one is 0.95, but this leads to OOM sometimes
-    "speculative_config": '{"method": "suffix", "num_speculative_tokens": 32}',
-    "enable_monitoring": True,
-    "examples_per_chunk": 100_000,  # 500 are around 2MB => 100_000 are around 400MB (~270MB compressed)
-    "optimization_level": 3,  # Set to 0 for debugging
-    "workers": 100,
-    "tasks": 100,
-}
-
 PROMPT_TEMPLATES: dict[str, str] = {
     "math": (
         "Rewrite the document to create a mathematical word problem based on the numerical data or relationships in "
@@ -73,6 +47,33 @@ PROMPT_TEMPLATES: dict[str, str] = {
         "points where appropriate to enhance clarity. Preserve all essential information while ensuring the style "
         "feels didactic and easy to follow. Output only the tutorial, nothing else.\n\nDocument: [[DOCUMENT]]"
     ),
+}
+
+
+KWARGS: dict[str, Any] = {
+    "time": "7-00:00:00",
+    "qos": "low",
+    "model_name_or_path": "HuggingFaceTB/SmolLM2-1.7B-Instruct",
+    "model_max_context": 8192,
+    "max_tokens": 2048,  # Could do 4096, but the model often does not generate as much anyway
+    "input_dataset_name": "HuggingFaceFW/fineweb-edu",
+    "input_dataset_config": "sample-350BT",
+    "input_dataset_split": "train",
+    "prompt_column": "text",
+    "output_dataset_name": "HuggingFaceFW/finephrase",
+    "output_dir": "finephrase",
+    "output_private": False,
+    "max_concurrent_generations": 5000,
+    "max_concurrent_documents": 5000,
+    "max_num_seqs": 2048,
+    "max_num_batched_tokens": 16384,  # Optimized for 32768 tokens, but we use 16384 tokens to avoid OOM
+    "gpu_memory_utilization": 0.90,  # Optimized one is 0.95, but this leads to OOM sometimes
+    "speculative_config": '{"method": "suffix", "num_speculative_tokens": 32}',
+    "enable_monitoring": True,
+    "examples_per_chunk": 100_000,  # 500 are around 2MB => 100_000 are around 400MB (~270MB compressed)
+    "optimization_level": 3,  # Set to 0 for debugging
+    "workers": 100,
+    "tasks": 100,
 }
 
 
