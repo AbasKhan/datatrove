@@ -32,15 +32,25 @@ For development or small-scale generation, use the `--local-execution` argument 
 
 ```sh
 python examples/inference/generate_data.py \
-    --input-dataset-name simplescaling/s1K-1.1 \
-    --input-dataset-split train \
-    --prompt-column question \
-    --model-name-or-path Qwen/Qwen3-4B-Thinking-2507 \
-    --output-dataset-name s1K-1.1-synthetic \
-    --output-dir data \
+    --input-dataset-name /local/path \
+    --prompt-column text \
+    --model-name-or-path Qwen/Qwen3.5-9B \
+    --output-dataset-name /local/path \
+    --max-tokens 10000 \
+    --model-max-context 20000 \
+    --speculative-config '{"method":"suffix","num_speculative_tokens":32}' \
+    --temperature 1.0 --top-p 1.0 --top-k 40 --min-p 0.0 \
+    --presence-penalty 2.0 --repetition-penalty 1.0 \
+    --prompt-template faq_de \
+    --no-enable-thinking \
+    --examples-per-chunk 100000 \
+    --partition ... \
+    --account ... \
+    --qos normal \
+    --mem 128G \
     --tasks 1 \
-    --examples-per-chunk 50 \
-    --local-execution
+    --workers 1
+
 ```
 
 Use the `--dp` and `--tp` flags to configure data and tensor parallelism for multi-GPU setups. For example, to run with 2-way tensor parallelism on 2 GPUs, set `--tp 2 --dp 1`.
@@ -52,7 +62,7 @@ For multi-node setups, usually you want to set `--tp {NUM_GPUS_PER_NODE}` and th
 
 When running on Slurm, DataTrove automatically manages three separate jobs with inter-dependencies to ensure efficient processing and accurate reporting:
 
-1.  **`inference`** (GPU array job): The main execution job that processes data in parallel using vLLM. It writes Parquet shards directly to the Hugging Face Hub. Upon successful completion of all tasks, it generates a `stats.json` file.
+1.  **`inference`** (GPU array job): The main execution job that processes data in parallel using vLLM. It writes JSONL shards to the output folder. Upon successful completion of all tasks, it generates a `stats.json` file.
 2.  **`monitor`** (CPU job): A lightweight job that periodically polls the repository for progress and updates the dataset card (README.md) with a live progress bar and ETA. The monitor runs in a loop and stops when either `stats.json` is created (inference completed successfully) or the Slurm job disappears from the queue without creating `stats.json` (inference failed/cancelled).
 3.  **`datacard`** (CPU job): This job runs only after the successful completion of the inference job (`afterok` dependency). it reads the final `stats.json` and generates the final, comprehensive dataset card with detailed token statistics.
 
@@ -70,8 +80,11 @@ python examples/inference/generate_data.py \
     --output-dir data \
     --workers 10 \
     --tasks 20 \
-    --examples-per-chunk 50
+    --examples-per-chunk 100000 \
+    --no-enable-thinking
 ```
+
+Setting `--examples-per-chunk` to a value larger than your total document count produces a single JSONL output file per task. Use a smaller value (e.g. `500`) if you want finer-grained checkpoint recovery at the cost of more output files.
 
 The script will automatically handle chunking, checkpointing, and queue management for you. The `--tasks` flag controls the size of the Slurm array, while `--workers` specifies the number of jobs that can run concurrently.
 
