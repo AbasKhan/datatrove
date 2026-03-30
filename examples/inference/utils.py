@@ -393,6 +393,7 @@ def build_run_path(
     output_dir: str,
     prompt_template_name: str,
     model_name_or_path: str,
+    run_id: str,
     tp: int = 1,
     pp: int = 1,
     dp: int = 1,
@@ -406,7 +407,7 @@ def build_run_path(
 ) -> Path:
     """Build the canonical run path for experiment outputs.
 
-    Path structure: {output_dir}/{prompt}/{model}/tp{TP}-pp{PP}-dp{DP}/mns_{N}/mnbt_{M}/gmu_{P}/bs_{B}/kvc_{...}/spec_{...}/quant_{...}
+    Path structure: {output_dir}/{run_id}/{prompt}/{model}/tp{TP}-pp{PP}-dp{DP}/mns_{N}/mnbt_{M}/gmu_{P}/bs_{B}/kvc_{...}/spec_{...}/quant_{...}
     """
     kv_norm = normalize_kvc_dtype(kv_cache_dtype)
     spec_norm = normalize_speculative(speculative_config) if speculative_config else None
@@ -414,6 +415,7 @@ def build_run_path(
 
     return (
         Path(output_dir)
+        / run_id
         / prompt_template_name
         / model_name_safe(model_name_or_path)
         / f"tp{tp}-pp{pp}-dp{dp}"

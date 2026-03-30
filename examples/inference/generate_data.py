@@ -59,6 +59,7 @@ python examples/inference/generate_data.py \
 
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
@@ -350,11 +351,15 @@ def main(
     normalized_quant = normalize_quantization(quantization)
     normalized_kv_dtype = normalize_kvc_dtype(kv_cache_dtype)
 
-    # Build dynamic output directory: {output_dir}/{prompt}/{model}/{tp-pp-dp}/{mns}/{mnbt}/{gmu}/{bs}/{kvc}/{spec}/{quant}
+    # Unique timestamp so concurrent jobs never share the same checkpoint/log dirs
+    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    # Build dynamic output directory: {output_dir}/{run_id}/{prompt}/{model}/{tp-pp-dp}/{mns}/{mnbt}/{gmu}/{bs}/{kvc}/{spec}/{quant}
     run_path = build_run_path(
         output_dir=output_dir,
         prompt_template_name=prompt_template_name,
         model_name_or_path=model_name_or_path,
+        run_id=run_id,
         tp=tp,
         pp=pp,
         dp=dp,
