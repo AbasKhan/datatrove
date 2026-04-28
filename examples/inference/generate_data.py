@@ -71,7 +71,7 @@ from datatrove.pipeline.inference.dataset_card_generator import (
     InferenceDatasetCardParams,
 )
 from datatrove.pipeline.inference.run_inference import InferenceConfig, InferenceResult, InferenceRunner
-from datatrove.pipeline.readers import HuggingFaceDatasetReader
+from datatrove.pipeline.readers import HuggingFaceDatasetReader, JsonlReader
 from datatrove.pipeline.writers import JsonlWriter
 from datatrove.utils.logging import logger
 
@@ -110,6 +110,11 @@ def _compute_reader_limit(max_examples: int, tasks: int) -> int:
     return reader_limit
 
 
+def _has_matching_files(data_path: Path, patterns: tuple[str, ...]) -> bool:
+    """Return True when a local dataset folder contains at least one file matching any pattern."""
+    return any(next(data_path.rglob(pattern), None) is not None for pattern in patterns)
+
+
 def main(
     # Input data details
     input_dataset_name: str = "simplescaling/s1K-1.1",
@@ -123,6 +128,7 @@ def main(
     output_private: bool = True,
     # Output logs and tmp files
     output_dir: str = "data",
+    resume: str | None = None,
     # Inference settings
     server_type: str = "vllm",
     model_name_or_path: str = "Qwen/Qwen3-0.6B",
@@ -169,12 +175,12 @@ def main(
     enable_monitoring: bool = False,
     benchmark_mode: bool = False,  # Skip output writing for benchmarking
     # slurm settings
-    name: str = "synth",
-    time: str = "12:00:00",
+    name: str = "synth_faq",
+    time: str = "30-00:00:00",
     qos: str = "low",
     partition: str = "hopper-prod",
-    account: str | None = None,
     reservation: str | None = None,
+    nodelist: str | None = None,
     mem: str | None = None,  # Total memory e.g. "128G"; overrides mem-per-cpu default
 ) -> None:
     """Typer CLI entrypoint that runs the pipeline with provided options."""
@@ -351,8 +357,9 @@ def main(
     normalized_quant = normalize_quantization(quantization)
     normalized_kv_dtype = normalize_kvc_dtype(kv_cache_dtype)
 
-    # Unique timestamp so concurrent jobs never share the same checkpoint/log dirs
-    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_id = resume if resume else datetime.now().strftime("%Y%m%d_%H%M%S")
+    if resume:
+        logger.info(f"Resuming existing run_id={run_id}")
 
     # Build dynamic output directory: {output_dir}/{run_id}/{prompt}/{model}/{tp-pp-dp}/{mns}/{mnbt}/{gmu}/{bs}/{kvc}/{spec}/{quant}
     run_path = build_run_path(
@@ -439,6 +446,7 @@ def main(
 
     input_dataset_path = Path(input_dataset_name).expanduser()
     load_input_from_disk = input_dataset_path.exists() and input_dataset_path.is_dir()
+    reader_limit = _compute_reader_limit(max_examples=max_examples, tasks=tasks)
 
     if load_input_from_disk and input_dataset_config is not None:
         logger.warning("Ignoring --input-dataset-config because local datasets loaded from disk do not use configs.")
@@ -446,14 +454,25 @@ def main(
     if load_input_from_disk:
         logger.info(f"Loading input dataset from local disk: {input_dataset_path}")
 
-    inference_pipeline = [
-        HuggingFaceDatasetReader(
-            dataset="parquet" if load_input_from_disk else input_dataset_name,
-            dataset_options={"data_dir": str(input_dataset_path), "split": "train"} if load_input_from_disk else {"name": input_dataset_config, "split": input_dataset_split},
+    if load_input_from_disk and _has_matching_files(input_dataset_path, ("*.jsonl", "*.jsonl.gz", "*.jsonl.zst")):
+        input_reader = JsonlReader(
+            data_folder=str(input_dataset_path),
             text_key=prompt_column,
-            limit=_compute_reader_limit(max_examples=max_examples, tasks=tasks),
+            limit=reader_limit,
+        )
+    else:
+        input_reader = HuggingFaceDatasetReader(
+            dataset="parquet" if load_input_from_disk else input_dataset_name,
+            dataset_options={"data_dir": str(input_dataset_path), "split": "train"}
+            if load_input_from_disk
+            else {"name": input_dataset_config, "split": input_dataset_split},
+            text_key=prompt_column,
+            limit=reader_limit,
             load_from_disk=False,
-        ),
+        )
+
+    inference_pipeline = [
+        input_reader,
         InferenceRunner(
             rollout_fn=simple_rollout,
             config=inference_config,
@@ -527,8 +546,11 @@ def main(
             f' && export HF_HOME="{hf_home}"'
             ' && export HF_XET_CACHE="/tmp/hf_xet/${SLURM_JOB_ID}_${SLURM_ARRAY_TASK_ID}_${SLURM_PROCID}"'
             ' && mkdir -p "$HF_XET_CACHE"'
-            " && export CUDA_HOME=/software/genoa/r25.06/CUDA/12.8.0"
-            " && export PATH=$CUDA_HOME/bin:$PATH"
+            ' && export CUDA_HOME="$(python -c \"import site; print(site.getsitepackages()[0])\")/nvidia/cu13"'
+            ' && export PATH="$CUDA_HOME/bin:$PATH"'
+            ' && export LD_LIBRARY_PATH="$CUDA_HOME/lib:$(python -c \"import site; print(site.getsitepackages()[0])\")/nvidia/cuda_runtime/lib:${LD_LIBRARY_PATH:-}"'
+            ' && export LIBRARY_PATH="$CUDA_HOME/lib:${LIBRARY_PATH:-}"'
+            ' && export FLASHINFER_CACHE_DIR="/data/home/abbas_khan/datatrove/.venv/flashinfer_cache"'
         )
 
         inference_executor = SlurmPipelineExecutor(
@@ -549,7 +571,7 @@ def main(
             srun_args={"cpu-bind": "none"},
             sbatch_args={
                 **({"reservation": reservation} if reservation else {}),
-                **({"account": account} if account else {}),
+                **({"nodelist": nodelist} if nodelist else {}),
             },
             env_command=slurm_env_command,
         )
@@ -579,7 +601,7 @@ def main(
                 qos=qos,
                 job_name=f"{name}_monitor",
                 cpus_per_task=1,
-                sbatch_args={"mem-per-cpu": "4G", "requeue": "", **({"account": account} if account else {})},
+                sbatch_args={"mem-per-cpu": "4G", "requeue": ""},
                 env_command=slurm_env_command,
             )
 
@@ -598,7 +620,7 @@ def main(
                 cpus_per_task=1,
                 depends=inference_executor,
                 run_on_dependency_fail=False,  # use afterok
-                sbatch_args={"mem-per-cpu": "4G", **({"account": account} if account else {})},
+                sbatch_args={"mem-per-cpu": "4G"},
                 env_command=slurm_env_command,
             )
             datacard_executor.run()

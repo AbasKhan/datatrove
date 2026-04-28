@@ -24,14 +24,27 @@ classifiers = [
 keywords = ["data", "machine", "learning", "processing"]
 requires-python = ">=3.10.0"
 dependencies = [
+  "arctic-inference>=0.1.2",
   "dill>=0.3.0",
   "fsspec>=2023.12.2",
-  "huggingface-hub>=0.34", # this version enables hf-xet
+  "huggingface-hub>=0.34.0,<1.0", # this version enables hf-xet
   "humanize",
   "loguru>=0.7.0",
   "multiprocess",
   "numpy>=2.0.0",
+  "nvidia-cublas>=13.3.0.5",
+  "nvidia-cuda-cccl>=13.2.27",
+  "nvidia-cuda-cupti>=13.2.23",
+  "nvidia-cuda-nvcc>=13.2.51",
+  "nvidia-cuda-nvrtc>=13.2.51",
+  "nvidia-cuda-runtime>=13.2.51",
+  "nvidia-cufft>=12.2.0.37",
+  "nvidia-curand>=10.4.2.51",
+  "nvidia-cusolver>=12.1.0.51",
+  "nvidia-cusparse>=12.7.9.17",
   "tqdm",
+  "typer>=0.24.1",
+  "vllm==0.19.0",
 ]
 
 [project.optional-dependencies]
@@ -129,6 +142,9 @@ dev = [
 
 [project.urls]
 Repository = "https://github.com/huggingface/datatrove"
+
+[[tool.uv.index]]
+url = "https://pypi.nvidia.com/"
 
 [project.scripts]
 check_dataset = "datatrove.tools.check_dataset:main"

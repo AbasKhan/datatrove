@@ -45,7 +45,6 @@ python examples/inference/generate_data.py \
     --no-enable-thinking \
     --examples-per-chunk 100000 \
     --partition ... \
-    --account ... \
     --qos normal \
     --mem 128G \
     --tasks 1 \
@@ -154,3 +153,44 @@ Set `--prompt-column` to a column that contains one of the following:
     ]
   }
   ```
+
+## Local Bring-Up Notes
+
+
+```sh
+uv add "datatrove[inference]"
+uv sync --extra inference
+uv add arctic-inference
+```
+
+After that, the generation command that worked was:
+
+```sh
+HF_HOME=/data/cache/hf_home \
+HF_HUB_OFFLINE=1 \
+TRANSFORMERS_OFFLINE=1 \
+NO_PROXY=localhost,127.0.0.1,::1 \
+no_proxy=localhost,127.0.0.1,::1 \
+python examples/inference/generate_data.py \
+  --input-dataset-name /data/home/abbas_khan/temp_data \
+  --prompt-column text \
+  --model-name-or-path Qwen/Qwen3.5-9B \
+  --output-dataset-name /data/home/abbas_khan/temp_output \
+  --max-tokens 10000 \
+  --model-max-context 30000 \
+  --speculative-config '{"method":"suffix","num_speculative_tokens":32}' \
+  --temperature 1.0 \
+  --top-p 0.95 \
+  --top-k 20 \
+  --min-p 0.0 \
+  --presence-penalty 1.5 \
+  --repetition-penalty 1.0 \
+  --prompt-template faq_de \
+  --no-enable-thinking \
+  --examples-per-chunk 100000 \
+  --partition dev \
+  --qos normal \
+  --mem 128G \
+  --tasks 1 \
+  --workers 1
+```
